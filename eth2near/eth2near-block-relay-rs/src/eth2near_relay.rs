@@ -10,7 +10,7 @@ use crate::prometheus_metrics::{
 use bitvec::macros::internal::funty::Fundamental;
 use contract_wrapper::eth_client_contract_trait::EthClientContractTrait;
 use contract_wrapper::near_rpc_client::NearRPCClient;
-use eth2_utility::consensus::SLOTS_PER_EPOCH;
+use eth2_utility::consensus::{EPOCHS_PER_SYNC_COMMITTEE_PERIOD, SLOTS_PER_EPOCH};
 use eth_rpc_client::beacon_rpc_client::BeaconRPCClient;
 use eth_rpc_client::errors::NoBlockForSlotError;
 use eth_rpc_client::eth1_rpc_client::Eth1RPCClient;
@@ -18,6 +18,7 @@ use eth_rpc_client::hand_made_finality_light_client_update::HandMadeFinalityLigh
 use eth_types::eth2::LightClientUpdate;
 use eth_types::BlockHeader;
 use log::{debug, info, trace, warn};
+use near_jsonrpc_primitives::types::light_client;
 use near_primitives::views::FinalExecutionStatus;
 use std::cmp;
 use std::error::Error;
@@ -577,39 +578,78 @@ impl Eth2NearRelay {
         let end_period = BeaconRPCClient::get_period_for_slot(last_finalized_slot_on_eth);
         info!(target: "relay", "Last finalized slot/period on ethereum={}/{}", last_finalized_slot_on_eth, end_period);
 
-        let light_client_update = if end_period == last_eth2_period_on_near_chain {
-            debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
-            let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
-            let mut update_epoch = last_epoch + self.interval_between_light_client_updates_submission_in_epochs;
+        debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
+        let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
+        let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
+        let mut update_epoch =
+            last_epoch + self.interval_between_light_client_updates_submission_in_epochs;
 
-            loop {
-                let res = self.beacon_rpc_client
-                .get_light_client_update_by_epoch(
-                    update_epoch,
-                );
+        let light_client_update = loop {
+            let res = self
+                .beacon_rpc_client
+                .get_light_client_update_by_epoch(update_epoch);
 
-                if res.is_ok() {
-                    break res.unwrap();
+            if let Ok(res) = res {
+                let update_epoch = res
+                    .finality_update
+                    .header_update
+                    .beacon_header
+                    .slot
+                    / SLOTS_PER_EPOCH;
+                let update_period = update_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
+
+                if update_period > last_period {
+                    debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
+                    return_on_fail!(
+                        self.beacon_rpc_client
+                            .get_light_client_update(update_period),
+                        "Error on getting light client update. Skipping sending light client update"
+                    );
                 }
 
-                warn!(target: "relay", "Error: {}", res.unwrap_err());
-                thread::sleep(Duration::from_secs(5));
-
-                update_epoch += 1;
+                break res;
             }
 
-            // return_on_fail!(
-            //     self.beacon_rpc_client.get_finality_light_client_update(),
-            //     "Error on getting light client update. Skipping sending light client update"
-            // )
-        } else {
-            debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
-            return_on_fail!(
-                self.beacon_rpc_client
-                    .get_light_client_update_for_last_period(),
-                "Error on getting light client update. Skipping sending light client update"
-            )
+            warn!(target: "relay", "Error: {}", res.unwrap_err());
+            thread::sleep(Duration::from_secs(5));
+
+            update_epoch += 1;
         };
+
+        // let light_client_update = if end_period == last_eth2_period_on_near_chain {
+        //     debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
+        //     let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
+        //     let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
+        //     let mut update_epoch = last_epoch + self.interval_between_light_client_updates_submission_in_epochs;
+
+        //     loop {
+        //         let res = self.beacon_rpc_client
+        //         .get_light_client_update_by_epoch(
+        //             update_epoch,
+        //         );
+
+        //         if res.is_ok() {
+        //             break res.unwrap();
+        //         }
+
+        //         warn!(target: "relay", "Error: {}", res.unwrap_err());
+        //         thread::sleep(Duration::from_secs(5));
+
+        //         update_epoch += 1;
+        //     }
+
+        //     // return_on_fail!(
+        //     //     self.beacon_rpc_client.get_finality_light_client_update(),
+        //     //     "Error on getting light client update. Skipping sending light client update"
+        //     // )
+        // } else {
+        //     debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
+        //     return_on_fail!(
+        //         self.beacon_rpc_client
+        //             .get_light_client_update(),
+        //         "Error on getting light client update. Skipping sending light client update"
+        //     )
+        // };
 
         self.send_specific_light_client_update(light_client_update);
     }
