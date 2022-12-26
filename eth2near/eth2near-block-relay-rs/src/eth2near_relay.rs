@@ -610,7 +610,7 @@ impl Eth2NearRelay {
             warn!(target: "relay", "Error: {}", res.unwrap_err());
             thread::sleep(Duration::from_secs(5));
 
-            update_epoch += 1;
+            update_epoch -= 1;
         };
 
         // let light_client_update = if end_period == last_eth2_period_on_near_chain {
