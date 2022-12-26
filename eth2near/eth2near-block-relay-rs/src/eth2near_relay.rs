@@ -593,7 +593,7 @@ impl Eth2NearRelay {
                     res.finality_update.header_update.beacon_header.slot / SLOTS_PER_EPOCH;
                 let update_period = update_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
 
-                if update_period > last_period {
+                if update_period > last_period + 1 {
                     debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
                     let res = return_on_fail!(
                         self.beacon_rpc_client
