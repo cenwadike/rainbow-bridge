@@ -581,7 +581,7 @@ impl Eth2NearRelay {
             debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
             let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
             self.beacon_rpc_client
-                .get_light_client_update(
+                .get_light_client_update_by_epoch(
                     last_epoch + self.interval_between_light_client_updates_submission_in_epochs,
                 )
                 .unwrap()
