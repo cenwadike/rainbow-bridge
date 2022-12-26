@@ -18,7 +18,6 @@ use eth_rpc_client::hand_made_finality_light_client_update::HandMadeFinalityLigh
 use eth_types::eth2::LightClientUpdate;
 use eth_types::BlockHeader;
 use log::{debug, info, trace, warn};
-use near_jsonrpc_primitives::types::light_client;
 use near_primitives::views::FinalExecutionStatus;
 use std::cmp;
 use std::error::Error;
@@ -77,6 +76,20 @@ macro_rules! return_on_fail_and_sleep {
                 trace!(target: "relay", "Sleep {} secs before next loop", $sleep_time);
                 thread::sleep(Duration::from_secs($sleep_time));
                 return;
+            }
+        }
+    };
+}
+
+macro_rules! return_val_on_fail_and_sleep {
+    ($res:expr, $msg:expr, $sleep_time:expr, $val:expr) => {
+        match $res {
+            Ok(val) => val,
+            Err(e) => {
+                warn!(target: "relay", "{}. Error: {}", $msg, e);
+                trace!(target: "relay", "Sleep {} secs before next loop", $sleep_time);
+                thread::sleep(Duration::from_secs($sleep_time));
+                return $val;
             }
         }
     };
@@ -531,22 +544,24 @@ impl Eth2NearRelay {
             return;
         }
 
-        self.send_regular_light_client_update(
+        if self.send_regular_light_client_update_by_epoch(
             last_finalized_slot_on_eth,
             last_finalized_slot_on_near,
-        );
+        ) {
+            return;
+        }
 
-        // if last_finalized_slot_on_eth
-        //     >= last_finalized_slot_on_near + self.max_blocks_for_finalization
-        // {
-        //     info!(target: "relay", "Too big gap between slot of finalized block on NEAR and ETH. Sending hand made light client update");
-        //     self.send_hand_made_light_client_update(last_finalized_slot_on_near);
-        // } else {
-        //     self.send_regular_light_client_update(
-        //         last_finalized_slot_on_eth,
-        //         last_finalized_slot_on_near,
-        //     );
-        // }
+        if last_finalized_slot_on_eth
+            >= last_finalized_slot_on_near + self.max_blocks_for_finalization
+        {
+            info!(target: "relay", "Too big gap between slot of finalized block on NEAR and ETH. Sending hand made light client update");
+            self.send_hand_made_light_client_update(last_finalized_slot_on_near);
+        } else {
+            self.send_regular_light_client_update(
+                last_finalized_slot_on_eth,
+                last_finalized_slot_on_near,
+            );
+        }
     }
 
     fn send_light_client_update_from_file(&mut self, last_submitted_slot: u64) {
@@ -578,6 +593,36 @@ impl Eth2NearRelay {
         let end_period = BeaconRPCClient::get_period_for_slot(last_finalized_slot_on_eth);
         info!(target: "relay", "Last finalized slot/period on ethereum={}/{}", last_finalized_slot_on_eth, end_period);
 
+        let light_client_update = if end_period == last_eth2_period_on_near_chain {
+            debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
+            return_on_fail!(
+                self.beacon_rpc_client.get_finality_light_client_update(),
+                "Error on getting light client update. Skipping sending light client update"
+            )
+        } else {
+            debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
+            return_on_fail!(
+                self.beacon_rpc_client
+                    .get_light_client_update_for_last_period(),
+                "Error on getting light client update. Skipping sending light client update"
+            )
+        };
+
+        self.send_specific_light_client_update(light_client_update);
+    }
+
+    fn send_regular_light_client_update_by_epoch(
+        &mut self,
+        last_finalized_slot_on_eth: u64,
+        last_finalized_slot_on_near: u64,
+    ) -> bool {
+        let last_eth2_period_on_near_chain =
+            BeaconRPCClient::get_period_for_slot(last_finalized_slot_on_near);
+        info!(target: "relay", "Last finalized slot/period on near={}/{}", last_finalized_slot_on_near, last_eth2_period_on_near_chain);
+
+        let end_period = BeaconRPCClient::get_period_for_slot(last_finalized_slot_on_eth);
+        info!(target: "relay", "Last finalized slot/period on ethereum={}/{}", last_finalized_slot_on_eth, end_period);
+
         let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
         let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
         let mut update_epoch =
@@ -595,10 +640,10 @@ impl Eth2NearRelay {
 
                 if update_period > last_period + 1 {
                     debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
-                    let res = return_on_fail!(
+                    let res = return_val_on_fail!(
                         self.beacon_rpc_client
                             .get_light_client_update(update_period),
-                        "Error on getting light client update. Skipping sending light client update"
+                        "Error on getting light client update. Skipping sending light client update", false
                     );
 
                     break res;
@@ -613,42 +658,7 @@ impl Eth2NearRelay {
             update_epoch -= 1;
         };
 
-        // let light_client_update = if end_period == last_eth2_period_on_near_chain {
-        //     debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
-        //     let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
-        //     let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
-        //     let mut update_epoch = last_epoch + self.interval_between_light_client_updates_submission_in_epochs;
-
-        //     loop {
-        //         let res = self.beacon_rpc_client
-        //         .get_light_client_update_by_epoch(
-        //             update_epoch,
-        //         );
-
-        //         if res.is_ok() {
-        //             break res.unwrap();
-        //         }
-
-        //         warn!(target: "relay", "Error: {}", res.unwrap_err());
-        //         thread::sleep(Duration::from_secs(5));
-
-        //         update_epoch += 1;
-        //     }
-
-        //     // return_on_fail!(
-        //     //     self.beacon_rpc_client.get_finality_light_client_update(),
-        //     //     "Error on getting light client update. Skipping sending light client update"
-        //     // )
-        // } else {
-        //     debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
-        //     return_on_fail!(
-        //         self.beacon_rpc_client
-        //             .get_light_client_update(),
-        //         "Error on getting light client update. Skipping sending light client update"
-        //     )
-        // };
-
-        self.send_specific_light_client_update(light_client_update);
+        self.send_specific_light_client_update(light_client_update)
     }
 
     fn get_attested_slot(
@@ -715,35 +725,41 @@ impl Eth2NearRelay {
         }
     }
 
-    fn send_specific_light_client_update(&mut self, light_client_update: LightClientUpdate) {
-        let is_known_block = return_on_fail!(
+    fn send_specific_light_client_update(
+        &mut self,
+        light_client_update: LightClientUpdate,
+    ) -> bool {
+        let is_known_block = return_val_on_fail!(
             self.eth_client_contract.is_known_block(
                 &light_client_update
                     .finality_update
                     .header_update
                     .execution_block_hash,
             ),
-            "Fail on the is_known_block method. Skipping sending light client update"
+            "Fail on the is_known_block method. Skipping sending light client update",
+            false
         );
 
         if is_known_block {
-            let verification_result = return_on_fail!(
+            let verification_result = return_val_on_fail!(
                 self.verify_bls_signature_for_finality_update(&light_client_update),
-                "Error on bls verification. Skip sending the light client update"
+                "Error on bls verification. Skip sending the light client update",
+                false
             );
 
             if verification_result {
                 info!(target: "relay", "PASS bls signature verification!");
             } else {
                 warn!(target: "relay", "NOT PASS bls signature verification. Skip sending this light client update");
-                return;
+                return false;
             }
 
-            let execution_outcome = return_on_fail_and_sleep!(
+            let execution_outcome = return_val_on_fail_and_sleep!(
                 self.eth_client_contract
                     .send_light_client_update(light_client_update.clone()),
                 "Fail to send light client update",
-                self.sleep_time_on_sync_secs
+                self.sleep_time_on_sync_secs,
+                false
             );
 
             info!(target: "relay", "Sending light client update");
@@ -756,7 +772,7 @@ impl Eth2NearRelay {
             info!(target: "relay", "Successful light client update submission! Transaction URL: https://explorer.{}.near.org/transactions/{}",
                                   self.near_network_name, execution_outcome.transaction.hash);
 
-            let finalized_block_number = return_on_fail!(
+            let finalized_block_number = return_val_on_fail!(
                 self.beacon_rpc_client
                     .get_block_number_for_slot(types::Slot::new(
                         light_client_update
@@ -766,16 +782,19 @@ impl Eth2NearRelay {
                             .slot
                             .as_u64()
                     )),
-                "Fail on getting finalized block number"
+                "Fail on getting finalized block number",
+                false
             );
 
             info!(target: "relay", "Finalized block number from light client update = {}", finalized_block_number);
             sleep(Duration::from_secs(self.sleep_time_after_submission_secs));
+            return true;
         } else {
             debug!(target: "relay", "Finalized block for light client update is not found on NEAR. Skipping send light client update {:?}", &light_client_update
             .finality_update
             .header_update
             .execution_block_hash);
+            return false;
         }
     }
 }
