@@ -10,6 +10,7 @@ use crate::prometheus_metrics::{
 use bitvec::macros::internal::funty::Fundamental;
 use contract_wrapper::eth_client_contract_trait::EthClientContractTrait;
 use contract_wrapper::near_rpc_client::NearRPCClient;
+use eth2_utility::consensus::SLOTS_PER_EPOCH;
 use eth_rpc_client::beacon_rpc_client::BeaconRPCClient;
 use eth_rpc_client::errors::NoBlockForSlotError;
 use eth_rpc_client::eth1_rpc_client::Eth1RPCClient;
@@ -312,13 +313,13 @@ impl Eth2NearRelay {
     }
 
     fn wait_for_synchronization(&self) -> Result<(), Box<dyn Error>> {
-        while self.beacon_rpc_client.is_syncing()?
-            || self.eth1_rpc_client.is_syncing()?
-            || self.near_rpc_client.is_syncing()?
-        {
-            info!(target: "relay", "Waiting for sync...");
-            thread::sleep(Duration::from_secs(self.sleep_time_on_sync_secs));
-        }
+        // while self.beacon_rpc_client.is_syncing()?
+        //     || self.eth1_rpc_client.is_syncing()?
+        //     || self.near_rpc_client.is_syncing()?
+        // {
+        //     info!(target: "relay", "Waiting for sync...");
+        //     thread::sleep(Duration::from_secs(self.sleep_time_on_sync_secs));
+        // }
         Ok(())
     }
 
@@ -529,17 +530,22 @@ impl Eth2NearRelay {
             return;
         }
 
-        if last_finalized_slot_on_eth
-            >= last_finalized_slot_on_near + self.max_blocks_for_finalization
-        {
-            info!(target: "relay", "Too big gap between slot of finalized block on NEAR and ETH. Sending hand made light client update");
-            self.send_hand_made_light_client_update(last_finalized_slot_on_near);
-        } else {
-            self.send_regular_light_client_update(
-                last_finalized_slot_on_eth,
-                last_finalized_slot_on_near,
-            );
-        }
+        self.send_regular_light_client_update(
+            last_finalized_slot_on_eth,
+            last_finalized_slot_on_near,
+        );
+
+        // if last_finalized_slot_on_eth
+        //     >= last_finalized_slot_on_near + self.max_blocks_for_finalization
+        // {
+        //     info!(target: "relay", "Too big gap between slot of finalized block on NEAR and ETH. Sending hand made light client update");
+        //     self.send_hand_made_light_client_update(last_finalized_slot_on_near);
+        // } else {
+        //     self.send_regular_light_client_update(
+        //         last_finalized_slot_on_eth,
+        //         last_finalized_slot_on_near,
+        //     );
+        // }
     }
 
     fn send_light_client_update_from_file(&mut self, last_submitted_slot: u64) {
@@ -573,10 +579,16 @@ impl Eth2NearRelay {
 
         let light_client_update = if end_period == last_eth2_period_on_near_chain {
             debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
-            return_on_fail!(
-                self.beacon_rpc_client.get_finality_light_client_update(),
-                "Error on getting light client update. Skipping sending light client update"
-            )
+            let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
+            self.beacon_rpc_client
+                .get_light_client_update(
+                    last_epoch + self.interval_between_light_client_updates_submission_in_epochs,
+                )
+                .unwrap()
+            // return_on_fail!(
+            //     self.beacon_rpc_client.get_finality_light_client_update(),
+            //     "Error on getting light client update. Skipping sending light client update"
+            // )
         } else {
             debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
             return_on_fail!(
