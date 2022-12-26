@@ -578,7 +578,6 @@ impl Eth2NearRelay {
         let end_period = BeaconRPCClient::get_period_for_slot(last_finalized_slot_on_eth);
         info!(target: "relay", "Last finalized slot/period on ethereum={}/{}", last_finalized_slot_on_eth, end_period);
 
-        debug!(target: "relay", "Finalized period on ETH and NEAR are equal. Don't fetch sync commity update");
         let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
         let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
         let mut update_epoch =
@@ -590,21 +589,19 @@ impl Eth2NearRelay {
                 .get_light_client_update_by_epoch(update_epoch);
 
             if let Ok(res) = res {
-                let update_epoch = res
-                    .finality_update
-                    .header_update
-                    .beacon_header
-                    .slot
-                    / SLOTS_PER_EPOCH;
+                let update_epoch =
+                    res.finality_update.header_update.beacon_header.slot / SLOTS_PER_EPOCH;
                 let update_period = update_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
 
                 if update_period > last_period {
                     debug!(target: "relay", "Finalized period on ETH and NEAR are different. Fetching sync commity update");
-                    return_on_fail!(
+                    let res = return_on_fail!(
                         self.beacon_rpc_client
                             .get_light_client_update(update_period),
                         "Error on getting light client update. Skipping sending light client update"
                     );
+
+                    break res;
                 }
 
                 break res;
