@@ -591,6 +591,10 @@ impl Eth2NearRelay {
                 if res.is_ok() {
                     break res.unwrap();
                 }
+
+                warn!(target: "relay", "Error: {}", res.unwrap_err());
+                thread::sleep(Duration::from_secs(5));
+
                 update_epoch += 1;
             }
 
