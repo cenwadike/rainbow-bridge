@@ -772,7 +772,10 @@ impl Eth2NearRelay {
             info!(target: "relay", "Finalized block number from light client update = {}", finalized_block_number);
             sleep(Duration::from_secs(self.sleep_time_after_submission_secs));
         } else {
-            debug!(target: "relay", "Finalized block for light client update is not found on NEAR. Skipping send light client update");
+            debug!(target: "relay", "Finalized block for light client update is not found on NEAR. Skipping send light client update {:?}", &light_client_update
+            .finality_update
+            .header_update
+            .execution_block_hash);
         }
     }
 }
