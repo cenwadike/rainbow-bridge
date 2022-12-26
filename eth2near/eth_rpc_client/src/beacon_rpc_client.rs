@@ -191,7 +191,12 @@ impl BeaconRPCClient {
             "{}/{}?start_epoch={}",
             self.endpoint_url, self.routes.get_light_client_update_by_epoch, epoch
         );
-        let light_client_update_json_str = self.get_json_from_raw_request(&url)?;
+        let mut light_client_update_json_str = self.get_json_from_raw_request(&url)?;
+        let v: Value = serde_json::from_str(light_client_update_json_str.as_str())?;
+        let object = json!({
+            "data": [v.get("data")],
+        });
+        light_client_update_json_str = serde_json::to_string(&object).unwrap();
 
         Ok(LightClientUpdate {
             attested_beacon_header: Self::get_attested_header_from_light_client_update_json_str(
