@@ -626,7 +626,7 @@ impl Eth2NearRelay {
         let last_epoch = last_finalized_slot_on_near / SLOTS_PER_EPOCH;
         let last_period = last_epoch / EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
         let mut update_epoch =
-            last_epoch + self.interval_between_light_client_updates_submission_in_epochs;
+            last_epoch + self.interval_between_light_client_updates_submission_in_epochs + 2;
 
         let light_client_update = loop {
             let res = self
